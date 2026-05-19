@@ -1,6 +1,6 @@
 ---
 name: session-token-monitor
-description: Monitor OpenClaw conversation token pressure and transcript size, produce consistent reply footers, warn before context compaction/reset risk, and report short-term/weekly usage when a user asks about session, token, context, compaction, reset, transcript size, usage quota, or LLM conversation health. Use for any OpenClaw assistant or LLM that must keep replies safe as sessions grow.
+description: Mandatory OpenClaw reply-footer workflow for every user-visible response: monitor conversation token pressure and transcript size, append consistent token/transcript footers, warn before context compaction/reset risk, and report short-term/weekly usage when asked about session, token, context, compaction, reset, transcript size, usage quota, or LLM conversation health.
 ---
 
 # Session Token Monitor
@@ -11,9 +11,9 @@ Use this skill to keep OpenClaw conversations healthy as they grow. It standardi
 
 This skill is intentionally simple and model-agnostic: any LLM can follow it.
 
-## Required Reply Footer
+## Mandatory Reply Footer
 
-Before every user-visible reply, collect session status and append a footer.
+For every user-visible reply, collect session status and append a footer. Treat this as a pre-send gate, not an optional status command.
 
 Preferred sources, in order:
 
@@ -29,6 +29,24 @@ Footer format:
 ```
 
 If an alert applies, place it directly before the session line or directly above the footer.
+
+## Install-Time Agent Hook
+
+OpenClaw skills teach the model what to do, but a skill alone is not a global middleware. For reliable every-reply behavior, installation should add this minimal hook to the target agent instructions (`AGENTS.md`, equivalent agent profile, or another always-loaded instruction file):
+
+```md
+<!-- session-token-monitor:start -->
+Before every user-visible reply, use the `session-token-monitor` skill and append its token/transcript footer. Treat this as a required pre-send gate; if footer collection fails, report the short failure instead of guessing.
+<!-- session-token-monitor:end -->
+```
+
+Use the bundled helper to add or update the marker block safely:
+
+```bash
+python3 skills/session-token-monitor/scripts/install_agent_hook.py AGENTS.md
+```
+
+The helper is idempotent: re-running it replaces only the marker block above. For uninstall, remove the marker block and the skill folder.
 
 ## Transcript Size Levels
 

@@ -6,6 +6,14 @@ Use this checklist before sharing the skill with customers or publishing it to G
 
 - `SKILL.md`
 - `scripts/session_footer.py`
+- `scripts/install_agent_hook.py`
+
+## Install verification
+
+- Skill folder is copied under the target workspace `skills/` directory.
+- Agent hook is installed into `AGENTS.md` or equivalent always-loaded instruction file.
+- Re-running `scripts/install_agent_hook.py` updates only the marker block.
+- A fresh session can load the skill and the hook.
 
 ## Must not include
 
