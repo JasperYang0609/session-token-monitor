@@ -53,3 +53,9 @@ The full monitoring logic remains in the skill. The hook is intentionally thin s
 ## Publish safety
 
 Before publishing, scan for secrets. This repository should not contain API keys, OAuth tokens, cookies, recovery codes, `.env`, local config, transcripts, or customer memory files.
+
+## Maintainer use of Codex
+
+This project is maintained as part of the OpenClaw ecosystem. We plan to use Codex to review pull requests, improve compatibility with OpenClaw session/runtime changes, expand safety checks for transcript and token footers, and keep installation documentation current.
+
+API-assisted maintenance should focus on issue triage, regression tests, documentation updates, and release notes. Codex should not be used to collect, store, or reveal private transcripts, API keys, OAuth tokens, cookies, or recovery codes.
