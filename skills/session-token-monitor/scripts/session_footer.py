@@ -137,9 +137,9 @@ def context_alert(context_tokens: Optional[int]) -> Optional[str]:
     if context_tokens > 150_000:
         return f"⚠️ 本頻道 session 已達 {label}，建議重置"
     if context_tokens > 130_000:
-        return f"⚡ 本對話已累積 {label} tokens，接近壓縮門檻。"
+        return f"⚡ 本對話已累積 {label} tokens。"
     if context_tokens > 100_000:
-        return f"⚡ 本對話已累積 {label} tokens，接近壓縮門檻。"
+        return f"⚡ 本對話已累積 {label} tokens。"
     return None
 
 

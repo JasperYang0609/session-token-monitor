@@ -61,8 +61,8 @@ The helper is idempotent: re-running it replaces only the marker block above. Fo
 
 Use the current runtime context token count when available, not a single-call usage total.
 
-- `>100K` → `⚡ 本對話已累積 <XXK> tokens，接近壓縮門檻。`
-- `>130K` → `⚡ 本對話已累積 <XXK> tokens，接近壓縮門檻。`
+- `>100K` → `⚡ 本對話已累積 <XXK> tokens。`
+- `>130K` → `⚡ 本對話已累積 <XXK> tokens。`
 - `>150K` → `⚠️ 本頻道 session 已達 <XXK>，建議重置`
 - `>200K` → `🔴 強烈建議先總結 + 備份 + reset`
 
