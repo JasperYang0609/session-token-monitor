@@ -1,6 +1,6 @@
 # session-token-monitor
 
-OpenClaw skill for consistent session token monitoring, transcript-size footers, and compaction/reset warnings.
+OpenClaw skill for consistent context-token monitoring, transcript-size footers, and compaction/reset warnings.
 
 ## Install from source
 
@@ -32,9 +32,9 @@ A `.skill` file is a zip archive. If your OpenClaw setup does not provide a dire
 
 ## What it does
 
-- Adds mandatory reply footer rules: transcript size + session token count
+- Adds mandatory reply footer rules: transcript size + current context token pressure
 - Warns at 100K / 130K / 150K / 200K token thresholds
-- Provides a dependency-free helper script: `scripts/session_footer.py`
+- Provides a dependency-free helper script: `scripts/session_footer.py` that requires an exact session selector by default and avoids single-call token totals
 - Provides an idempotent hook installer: `scripts/install_agent_hook.py`
 - Avoids storing or printing API keys, tokens, cookies, or recovery codes
 
@@ -59,3 +59,18 @@ Before publishing, scan for secrets. This repository should not contain API keys
 This project is maintained as part of the OpenClaw ecosystem. We plan to use Codex to review pull requests, improve compatibility with OpenClaw session/runtime changes, expand safety checks for transcript and token footers, and keep installation documentation current.
 
 API-assisted maintenance should focus on issue triage, regression tests, documentation updates, and release notes. Codex should not be used to collect, store, or reveal private transcripts, API keys, OAuth tokens, cookies, or recovery codes.
+
+## Token source rules
+
+Use runtime/session status `📚 Context: <used>/<limit>` as the source of truth for context pressure. Do not display message API `usage.totalTokens` or ambiguous session-index `totalTokens` as the current session size; those can represent a single model call.
+
+For automation, pass parsed runtime values into the helper:
+
+```bash
+python3 skills/session-token-monitor/scripts/session_footer.py \
+  --session-key 'agent:main:discord:channel:123' \
+  --context-tokens 101000 \
+  --context-limit 272000
+```
+
+Without `--session-key`, `--channel-id`, or `--to`, the helper fails closed unless `--allow-latest` is explicitly provided.

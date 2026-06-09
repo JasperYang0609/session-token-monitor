@@ -17,18 +17,20 @@ For every user-visible reply, collect session status and append a footer. Treat 
 
 Preferred sources, in order:
 
-1. Use the runtime/session status tool if available.
-2. Run `scripts/session_footer.py` from this skill if local files are available.
+1. Use the runtime/session status tool for current context pressure (`📚 Context: <used>/<limit>`).
+2. Run `scripts/session_footer.py` from this skill for transcript size, passing an exact `--session-key`, `--channel-id`, or `--to`.
 3. If neither works, state that the footer is unavailable; do not guess.
 
 Footer format:
 
 ```text
 📝 Transcript: <size> MB｜<level>
-📊 Session: <tokens> tokens
+📊 Context: <used> / <limit>
 ```
 
-If an alert applies, place it directly before the session line or directly above the footer.
+If an alert applies, place it directly above the footer.
+
+Do **not** use per-call API usage fields, message `usage.totalTokens`, or ambiguous `sessions.json.totalTokens` as the context/session token count. Those fields may represent one model call rather than the current conversation context. If the runtime status is unavailable, show `📊 Context: unknown / <limit>` or `unknown tokens` instead of guessing.
 
 ## Install-Time Agent Hook
 
@@ -57,7 +59,7 @@ The helper is idempotent: re-running it replaces only the marker block above. Fo
 
 ## Token Warning Thresholds
 
-Use the total conversation/session token count when available.
+Use the current runtime context token count when available, not a single-call usage total.
 
 - `>100K` → `⚡ 本對話已累積 <XXK> tokens，接近壓縮門檻。`
 - `>130K` → `⚡ 對話即將觸發大綱壓縮，下一次回覆可能需要 30-60 秒，請稍等！`
@@ -68,27 +70,39 @@ Use the highest applicable warning only unless the user specifically asks for de
 
 ## When the User Asks About Session / Token / Quota
 
-Answer with current model/runtime if available, session tokens and context limit, transcript size and level, 5-hour usage remaining/reset countdown, weekly usage remaining/reset countdown, and whether reset/summary is recommended.
+Answer with current model/runtime if available, current context tokens and context limit, transcript size and level, 5-hour usage remaining/reset countdown, weekly usage remaining/reset countdown, and whether reset/summary is recommended.
 
 Keep the answer concise. Do not expose private paths unless useful for debugging.
 
 ## Script Usage
 
-Use `scripts/session_footer.py` to generate the footer. Important options:
+Use `scripts/session_footer.py` to generate the transcript/context footer. Important options:
 
 - `--json` for machine-readable output
 - `--session-key <openclaw-session-key>` to select an exact session
 - `--channel-id <id>` to select a channel session
 - `--to channel:<id>` to select by OpenClaw recipient
+- `--context-tokens <n>` to inject current context tokens parsed from runtime/session status
+- `--context-limit <n>` to inject the context window limit parsed from runtime/session status
+- `--allow-latest` to opt in to fallback by most recent session; avoid this for live reply footers
 - `--sessions-json /path/to/sessions.json` to override the default session index
 
-The script reads OpenClaw's local session index by default: `~/.openclaw/agents/main/sessions/sessions.json`.
+The script reads OpenClaw's local session index by default: `~/.openclaw/agents/main/sessions/sessions.json`. By default it refuses to guess the current session; pass an exact selector. It also refuses to infer current context pressure from `totalTokens`.
+
+Example when runtime status says `📚 Context: 101k/272k`:
+
+```bash
+python3 skills/session-token-monitor/scripts/session_footer.py \
+  --session-key 'agent:main:discord:channel:123' \
+  --context-tokens 101000 \
+  --context-limit 272000
+```
 
 ## Fallback Rules
 
-If token count is missing but transcript size is known, still show the transcript line and show `📊 Session: unknown tokens`.
+If context token count is missing but transcript size is known, still show the transcript line and show `📊 Context: unknown / <limit>` when a limit is known, or `📊 Context: unknown tokens`.
 
-If transcript size is missing but runtime status has token count, omit the transcript line and show the session token line.
+If transcript size is missing but runtime status has context tokens, omit the transcript line and show the context line.
 
 If everything fails, output:
 
