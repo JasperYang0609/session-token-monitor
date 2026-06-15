@@ -21,6 +21,10 @@ Preferred sources, in order:
 2. Run `scripts/session_footer.py` from this skill for transcript size, passing an exact `--session-key`, `--channel-id`, or `--to`.
 3. If neither works, state that the footer is unavailable; do not guess.
 
+**Always re-fetch fresh on every reply.** Do not carry over the previous turn's context tokens or limit. Do not increment by feel (e.g. "+2K every turn"). The runtime status is the source of truth — call it every time.
+
+**Model-switch invalidates the limit.** Different models have different context windows (e.g. Codex GPT-5.5 ≈ 272K, Claude Opus 4.7 ≈ 1M, Claude Sonnet 4.6 ≈ 200K). When the active model changes mid-conversation, the previous limit is stale. Re-fetch from runtime status before reporting the next footer.
+
 Footer format:
 
 ```text
