@@ -42,7 +42,7 @@ OpenClaw skills teach the model what to do, but a skill alone is not a global mi
 
 ```md
 <!-- session-token-monitor:start -->
-Before every user-visible reply, use the `session-token-monitor` skill and append its token/transcript footer. Treat this as a required pre-send gate; if footer collection fails, report the short failure instead of guessing.
+Before every user-visible reply, use the `session-token-monitor` skill and append its token/transcript footer. Treat this as a required pre-send gate: fetch fresh runtime/session status every time, pass the current `📚 Context: used/limit` into the footer helper, never reuse prior token/limit values, and never use per-call `usage.totalTokens` or `sessions.json.totalTokens` as current context pressure. If footer collection fails, report the short failure instead of guessing.
 <!-- session-token-monitor:end -->
 ```
 
@@ -88,10 +88,17 @@ Use `scripts/session_footer.py` to generate the transcript/context footer. Impor
 - `--to channel:<id>` to select by OpenClaw recipient
 - `--context-tokens <n>` to inject current context tokens parsed from runtime/session status
 - `--context-limit <n>` to inject the context window limit parsed from runtime/session status
+- `--status-text <text>` or `--status-file <path>` to parse `📚 Context: used/limit`, model, runtime, and compaction count from a status card
+- `--token-source <label>` to explicitly label injected values; prefer `runtime-status`
+- `--history-json <path>` to compare against the previous footer state and warn on suspicious token drops or context-limit changes
+- `--audit-log <path>` to append JSONL diagnostics for customer troubleshooting
+- `--no-history` to disable local state comparison
 - `--allow-latest` to opt in to fallback by most recent session; avoid this for live reply footers
 - `--sessions-json /path/to/sessions.json` to override the default session index
 
 The script reads OpenClaw's local session index by default: `~/.openclaw/agents/main/sessions/sessions.json`. By default it refuses to guess the current session; pass an exact selector. It also refuses to infer current context pressure from `totalTokens`.
+
+The helper now keeps a small local history at `~/.openclaw/session-token-monitor/history.json` by default. It uses this only to detect suspicious changes, such as context tokens suddenly dropping without a compaction/model switch or context limits changing mid-session. Use `--no-history` to disable this.
 
 Example when runtime status says `📚 Context: 101k/272k`:
 
@@ -101,6 +108,17 @@ python3 skills/session-token-monitor/scripts/session_footer.py \
   --context-tokens 101000 \
   --context-limit 272000
 ```
+
+## Diagnostic Warnings
+
+The helper emits inline warnings before the footer when it detects suspicious conditions:
+
+- `Context token unavailable` — no reliable runtime context was provided, so it refuses to guess.
+- `Context token source suspicious` — values came from a weak source instead of runtime status.
+- `Context limit changed` — the same session's limit changed, often due to model switch or runtime reporting changes.
+- `Context token suspicious drop` — tokens dropped sharply without a known compaction/model switch; this often means a per-call reply token was used by mistake or the wrong session was selected.
+
+For customer debugging, run with `--audit-log logs/session-token-monitor.jsonl` so each footer writes a compact JSON record with time, session key, model, runtime, context tokens, context limit, source, compaction count, and warnings.
 
 ## Fallback Rules
 

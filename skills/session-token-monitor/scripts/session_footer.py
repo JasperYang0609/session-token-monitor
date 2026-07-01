@@ -5,8 +5,8 @@ This helper intentionally treats transcript size and context-token pressure as
 separate signals:
 
 - transcript size comes from the local session jsonl file;
-- context tokens must come from a runtime/session-status source or an explicit
-  CLI override.
+- context tokens must come from a runtime/session-status source, status text, or
+  an explicit CLI override.
 
 Do not infer context pressure from per-call API usage fields such as
 ``totalTokens`` in message usage records. Those values can represent a single
@@ -18,11 +18,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 DEFAULT_SESSIONS_JSON = "~/.openclaw/agents/main/sessions/sessions.json"
+DEFAULT_HISTORY_JSON = "~/.openclaw/session-token-monitor/history.json"
+
+CONTEXT_RE = re.compile(r"📚\s*Context:\s*([0-9][0-9,]*(?:\.\d+)?)\s*([KkMm])?\s*/\s*([0-9][0-9,]*(?:\.\d+)?)\s*([KkMm])?")
+MODEL_RE = re.compile(r"🧠\s*Model:\s*([^·\n]+)")
+COMPACTIONS_RE = re.compile(r"🧹\s*Compactions:\s*([0-9][0-9,]*)")
+RUNTIME_RE = re.compile(r"Runtime:\s*([^·\n]+)")
 
 
 def load_sessions(path: str) -> Dict[str, Any]:
@@ -48,11 +56,7 @@ def find_session_entry(
         return session_key, entry
 
     if to_value:
-        matches = [
-            (k, v)
-            for k, v in data.items()
-            if isinstance(v, dict) and v.get("lastTo") == to_value
-        ]
+        matches = [(k, v) for k, v in data.items() if isinstance(v, dict) and v.get("lastTo") == to_value]
         if not matches:
             raise KeyError(f"no session with lastTo={to_value}")
         matches.sort(key=lambda kv: kv[1].get("updatedAt", 0), reverse=True)
@@ -60,35 +64,19 @@ def find_session_entry(
 
     if channel_id:
         wanted = f"channel:{channel_id}"
-        matches = [
-            (k, v)
-            for k, v in data.items()
-            if isinstance(v, dict) and v.get("lastTo") == wanted
-        ]
+        matches = [(k, v) for k, v in data.items() if isinstance(v, dict) and v.get("lastTo") == wanted]
         if not matches:
-            # Some OpenClaw versions encode channel sessions only in the key.
             marker = f":channel:{channel_id}"
-            matches = [
-                (k, v)
-                for k, v in data.items()
-                if isinstance(v, dict) and marker in k and v.get("sessionFile")
-            ]
+            matches = [(k, v) for k, v in data.items() if isinstance(v, dict) and marker in k and v.get("sessionFile")]
         if not matches:
             raise KeyError(f"no session with channel_id={channel_id}")
         matches.sort(key=lambda kv: kv[1].get("updatedAt", 0), reverse=True)
         return matches[0]
 
     if not allow_latest:
-        raise ValueError(
-            "refusing to guess the current session; pass --session-key, --channel-id, "
-            "or --to, or opt in with --allow-latest"
-        )
+        raise ValueError("refusing to guess the current session; pass --session-key, --channel-id, or --to, or opt in with --allow-latest")
 
-    candidates = [
-        (k, v)
-        for k, v in data.items()
-        if isinstance(v, dict) and v.get("sessionFile")
-    ]
+    candidates = [(k, v) for k, v in data.items() if isinstance(v, dict) and v.get("sessionFile")]
     if not candidates:
         raise KeyError("no session entries with sessionFile found")
     candidates.sort(key=lambda kv: kv[1].get("updatedAt", 0), reverse=True)
@@ -113,6 +101,48 @@ def parse_int(value: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None
+
+
+def parse_token_number(number: str, suffix: Optional[str]) -> Optional[int]:
+    try:
+        value = float(number.replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    multiplier = 1
+    if suffix and suffix.lower() == "k":
+        multiplier = 1_000
+    elif suffix and suffix.lower() == "m":
+        multiplier = 1_000_000
+    parsed = int(round(value * multiplier))
+    return parsed if parsed >= 0 else None
+
+
+def read_optional_text(value: Optional[str], file_value: Optional[str]) -> Optional[str]:
+    if value:
+        return value
+    if file_value:
+        return Path(os.path.expanduser(file_value)).read_text(encoding="utf-8")
+    return None
+
+
+def parse_status_text(text: Optional[str]) -> Dict[str, Any]:
+    if not text:
+        return {}
+    result: Dict[str, Any] = {}
+    m = CONTEXT_RE.search(text)
+    if m:
+        result["contextTokens"] = parse_token_number(m.group(1), m.group(2))
+        result["contextLimit"] = parse_token_number(m.group(3), m.group(4))
+    m = MODEL_RE.search(text)
+    if m:
+        result["model"] = m.group(1).strip()
+    m = COMPACTIONS_RE.search(text)
+    if m:
+        result["compactions"] = parse_int(m.group(1))
+    m = RUNTIME_RE.search(text)
+    if m:
+        result["runtime"] = m.group(1).strip()
+    return result
 
 
 def format_k_tokens(value: Optional[int]) -> str:
@@ -143,35 +173,125 @@ def context_alert(context_tokens: Optional[int]) -> Optional[str]:
     return None
 
 
-def resolve_context_tokens(args: argparse.Namespace, entry: Dict[str, Any]) -> Tuple[Optional[int], Optional[int], str]:
-    """Return (current_context_tokens, context_limit, source).
+def load_history(path: str) -> Dict[str, Any]:
+    p = Path(os.path.expanduser(path))
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_history(path: str, data: Dict[str, Any]) -> None:
+    p = Path(os.path.expanduser(path))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def append_audit(path: Optional[str], record: Dict[str, Any]) -> None:
+    if not path:
+        return
+    p = Path(os.path.expanduser(path))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def resolve_context_tokens(args: argparse.Namespace, entry: Dict[str, Any]) -> Tuple[Optional[int], Optional[int], str, Dict[str, Any]]:
+    """Return (current_context_tokens, context_limit, source, status_meta).
 
     `sessions.json.totalTokens` is intentionally not used here: in some
     OpenClaw/provider paths it reflects a single model-call usage value. Prefer
-    explicit values parsed from a runtime status card. The local session index is
-    only trusted for the context limit when available.
+    values parsed from runtime status text or explicit values supplied by the
+    caller. The local session index is only trusted for the context limit when
+    available.
     """
-    context_tokens = parse_int(args.context_tokens)
-    context_limit = parse_int(args.context_limit)
-    source = "cli" if context_tokens is not None else "unknown"
+    status_text = read_optional_text(args.status_text, args.status_file)
+    status_meta = parse_status_text(status_text)
+
+    context_tokens = status_meta.get("contextTokens")
+    context_limit = status_meta.get("contextLimit")
+    source = "runtime-status" if context_tokens is not None else "unknown"
+
+    cli_tokens = parse_int(args.context_tokens)
+    cli_limit = parse_int(args.context_limit)
+    if cli_tokens is not None:
+        context_tokens = cli_tokens
+        source = args.token_source or "cli"
+    if cli_limit is not None:
+        context_limit = cli_limit
+        if context_tokens is None and source == "unknown":
+            source = "cli-limit-only"
 
     if context_limit is None:
         context_limit = parse_int(entry.get("contextTokens"))
         if context_limit is not None and source == "unknown":
             source = "session-index-limit-only"
 
-    return context_tokens, context_limit, source
+    return context_tokens, context_limit, source, status_meta
+
+
+def anomaly_warnings(
+    session_key: str,
+    context_tokens: Optional[int],
+    context_limit: Optional[int],
+    token_source: str,
+    status_meta: Dict[str, Any],
+    args: argparse.Namespace,
+) -> Tuple[List[str], Optional[Dict[str, Any]], Dict[str, Any]]:
+    warnings: List[str] = []
+    history = {} if args.no_history else load_history(args.history_json)
+    previous = history.get(session_key) if isinstance(history.get(session_key), dict) else None
+
+    if context_tokens is None:
+        warnings.append("⚠️ Context token unavailable：未取得可靠 runtime context，已拒絕猜測。")
+    elif token_source not in {"runtime-status", "cli"} and not token_source.endswith("runtime-status"):
+        warnings.append(f"⚠️ Context token source suspicious：目前來源是 {token_source}，請優先改用 runtime status。")
+
+    current_compactions = status_meta.get("compactions")
+    current_model = status_meta.get("model") or args.model
+    previous_compactions = previous.get("compactions") if previous else None
+    previous_model = previous.get("model") if previous else None
+    reset_like = False
+    if previous_compactions is not None and current_compactions is not None and current_compactions > previous_compactions:
+        reset_like = True
+    if previous_model and current_model and previous_model != current_model:
+        reset_like = True
+
+    if previous:
+        prev_tokens = parse_int(previous.get("contextTokens"))
+        prev_limit = parse_int(previous.get("contextLimit"))
+        if prev_limit is not None and context_limit is not None and prev_limit != context_limit:
+            hint = "可能是模型切換或 runtime 回報變動"
+            warnings.append(f"⚠️ Context limit changed：{format_k_tokens(prev_limit)} → {format_k_tokens(context_limit)}（{hint}）。")
+        if prev_tokens is not None and context_tokens is not None:
+            large_drop = prev_tokens >= args.drop_min_previous and context_tokens <= prev_tokens * args.drop_ratio
+            if large_drop and not reset_like:
+                warnings.append(
+                    f"⚠️ Context token suspicious drop：{format_k_tokens(prev_tokens)} → {format_k_tokens(context_tokens)}，可能拿到單次回覆 token 或選錯 session。"
+                )
+
+    current_record = {
+        "time": int(time.time()),
+        "sessionKey": session_key,
+        "contextTokens": context_tokens,
+        "contextLimit": context_limit,
+        "tokenSource": token_source,
+        "model": current_model,
+        "runtime": status_meta.get("runtime") or args.runtime,
+        "compactions": current_compactions,
+    }
+    if not args.no_history:
+        history[session_key] = current_record
+        save_history(args.history_json, history)
+    return warnings, previous, current_record
 
 
 def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
     data = load_sessions(args.sessions_json)
-    key, entry = find_session_entry(
-        data,
-        args.session_key,
-        args.to,
-        args.channel_id,
-        args.allow_latest,
-    )
+    key, entry = find_session_entry(data, args.session_key, args.to, args.channel_id, args.allow_latest)
 
     session_file = entry.get("sessionFile")
     transcript_line = None
@@ -190,21 +310,23 @@ def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
             if args.strict:
                 raise FileNotFoundError(f"cannot stat sessionFile: {expanded}: {exc}") from exc
 
-    context_tokens, context_limit, token_source = resolve_context_tokens(args, entry)
+    context_tokens, context_limit, token_source, status_meta = resolve_context_tokens(args, entry)
     if context_limit is not None:
         context_line = f"📊 Context: {format_k_tokens(context_tokens)} / {format_k_tokens(context_limit)}"
     else:
         context_line = f"📊 Context: {format_k_tokens(context_tokens)} tokens"
     alert_line = context_alert(context_tokens)
+    warnings, previous, current_record = anomaly_warnings(key, context_tokens, context_limit, token_source, status_meta, args)
 
     lines = []
     if alert_line:
         lines.append(alert_line)
+    lines.extend(warnings)
     if transcript_line:
         lines.append(transcript_line)
     lines.append(context_line)
 
-    return {
+    payload = {
         "sessionKey": key,
         "sessionFile": session_file,
         "sizeBytes": size_bytes,
@@ -213,11 +335,16 @@ def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
         "contextTokens": context_tokens,
         "contextLimit": context_limit,
         "tokenSource": token_source,
+        "statusMeta": status_meta,
+        "previous": previous,
+        "warnings": warnings,
         "transcriptLine": transcript_line,
         "contextLine": context_line,
         "alertLine": alert_line,
         "lines": lines,
     }
+    append_audit(args.audit_log, current_record | {"warnings": warnings, "sizeBytes": size_bytes})
+    return payload
 
 
 def main() -> int:
@@ -228,6 +355,16 @@ def main() -> int:
     parser.add_argument("--channel-id")
     parser.add_argument("--context-tokens", help="Current context tokens from runtime/session status")
     parser.add_argument("--context-limit", help="Context window limit from runtime/session status")
+    parser.add_argument("--token-source", help="Override token source label when passing explicit context values")
+    parser.add_argument("--status-text", help="Raw runtime/session status text containing '📚 Context: used/limit'")
+    parser.add_argument("--status-file", help="File containing raw runtime/session status text")
+    parser.add_argument("--model", help="Active model label for anomaly diagnostics")
+    parser.add_argument("--runtime", help="Runtime label for audit diagnostics")
+    parser.add_argument("--history-json", default=DEFAULT_HISTORY_JSON, help="State file used to compare previous footer values")
+    parser.add_argument("--no-history", action="store_true", help="Do not read/write previous footer state")
+    parser.add_argument("--audit-log", help="Optional JSONL audit log path for diagnostics")
+    parser.add_argument("--drop-ratio", type=float, default=0.5, help="Warn if tokens drop below this ratio of previous value")
+    parser.add_argument("--drop-min-previous", type=int, default=20_000, help="Minimum previous context tokens before drop warning is enabled")
     parser.add_argument("--allow-latest", action="store_true", help="Allow fallback to most recently updated session")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--strict", action="store_true", help="fail if the transcript file cannot be inspected")

@@ -54,3 +54,11 @@ SUPABASE_SERVICE_ROLE_KEY
 ```
 
 A variable name by itself is usually safe; a real credential value is not.
+
+## Runtime diagnostics verification
+
+- Run the helper with real runtime status values or `--status-text` and confirm `tokenSource` is `runtime-status` or explicitly labeled.
+- Run once with a high token value, then again with a much lower value using the same `--history-json`; confirm `Context token suspicious drop` appears.
+- Run with a changed `--context-limit`; confirm `Context limit changed` appears.
+- Run without `--context-tokens` or `--status-text`; confirm it shows `unknown` instead of guessing a per-call token total.
+- If installing for a customer, run `scripts/install_agent_hook.py --check AGENTS.md` after installation.

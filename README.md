@@ -38,6 +38,11 @@ A `.skill` file is a zip archive. If your OpenClaw setup does not provide a dire
 - Provides an idempotent hook installer: `scripts/install_agent_hook.py`
 - Avoids storing or printing API keys, tokens, cookies, or recovery codes
 
+
+## Diagnostics and anomaly warnings
+
+The helper refuses to guess current context pressure from per-call usage fields. It can parse runtime status text via `--status-text` / `--status-file`, keeps a small local history by default, and warns when context tokens suddenly drop or context limits change mid-session. Use `--audit-log <path>` for customer troubleshooting.
+
 ## Agent hook
 
 The installer adds this marker block to `AGENTS.md` or another always-loaded instruction file:
