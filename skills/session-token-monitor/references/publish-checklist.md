@@ -58,7 +58,15 @@ A variable name by itself is usually safe; a real credential value is not.
 ## Runtime diagnostics verification
 
 - Run the helper with real runtime status values or `--status-text` and confirm `tokenSource` is `runtime-status` or explicitly labeled.
-- Run once with a high token value, then again with a much lower value using the same `--history-json`; confirm `Context token suspicious drop` appears.
+- Run once with a high trusted token value, then again with a much lower unexplained value using the same `--history-json`; confirm `Context token suspicious drop` appears and the trusted history baseline is unchanged.
 - Run with a changed `--context-limit`; confirm `Context limit changed` appears.
 - Run without `--context-tokens` or `--status-text`; confirm it shows `unknown` instead of guessing a per-call token total.
 - If installing for a customer, run `scripts/install_agent_hook.py --check AGENTS.md` after installation.
+
+
+## Automated verification
+
+- `python3 -m unittest discover -s tests -p 'test_*.py' -v`
+- `python3 -m py_compile skills/session-token-monitor/scripts/*.py scripts/*.py tests/*.py`
+- `python3 scripts/build_skill_archive.py --check`
+- Confirm history/audit fixtures are mode `0600` and no real session data appears in tests.

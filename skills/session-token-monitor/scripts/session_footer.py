@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -184,19 +185,59 @@ def load_history(path: str) -> Dict[str, Any]:
         return {}
 
 
+def ensure_private_parent(path: Path) -> None:
+    parent_existed = path.parent.exists()
+    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    if not parent_existed:
+        os.chmod(path.parent, 0o700)
+
+
 def save_history(path: str, data: Dict[str, Any]) -> None:
+    """Atomically replace history so interruption cannot leave partial JSON."""
     p = Path(os.path.expanduser(path))
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    ensure_private_parent(p)
+    payload = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    fd, temporary = tempfile.mkstemp(prefix=f".{p.name}.", dir=p.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, p)
+        os.chmod(p, 0o600)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def append_audit(path: Optional[str], record: Dict[str, Any]) -> None:
     if not path:
         return
     p = Path(os.path.expanduser(path))
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    ensure_private_parent(p)
+    fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+
+
+def is_trusted_token_source(source: str) -> bool:
+    return source in {"runtime-status", "cli"}
 
 
 def resolve_context_tokens(args: argparse.Namespace, entry: Dict[str, Any]) -> Tuple[Optional[int], Optional[int], str, Dict[str, Any]]:
@@ -217,13 +258,17 @@ def resolve_context_tokens(args: argparse.Namespace, entry: Dict[str, Any]) -> T
 
     cli_tokens = parse_int(args.context_tokens)
     cli_limit = parse_int(args.context_limit)
-    if cli_tokens is not None:
+    if context_tokens is None and cli_tokens is not None:
         context_tokens = cli_tokens
         source = args.token_source or "cli"
-    if cli_limit is not None:
+    elif context_tokens is not None and cli_tokens is not None and context_tokens != cli_tokens:
+        status_meta["cliContextConflict"] = cli_tokens
+    if context_limit is None and cli_limit is not None:
         context_limit = cli_limit
         if context_tokens is None and source == "unknown":
             source = "cli-limit-only"
+    elif context_limit is not None and cli_limit is not None and context_limit != cli_limit:
+        status_meta["cliLimitConflict"] = cli_limit
 
     if context_limit is None:
         context_limit = parse_int(entry.get("contextTokens"))
@@ -245,10 +290,13 @@ def anomaly_warnings(
     history = {} if args.no_history else load_history(args.history_json)
     previous = history.get(session_key) if isinstance(history.get(session_key), dict) else None
 
+    source_trusted = context_tokens is not None and is_trusted_token_source(token_source)
     if context_tokens is None:
         warnings.append("⚠️ Context token unavailable：未取得可靠 runtime context，已拒絕猜測。")
-    elif token_source not in {"runtime-status", "cli"} and not token_source.endswith("runtime-status"):
+    elif not source_trusted:
         warnings.append(f"⚠️ Context token source suspicious：目前來源是 {token_source}，請優先改用 runtime status。")
+    if "cliContextConflict" in status_meta or "cliLimitConflict" in status_meta:
+        warnings.append("⚠️ Context source conflict：runtime status 與 CLI 值不一致，已保留 runtime status。")
 
     current_compactions = status_meta.get("compactions")
     current_model = status_meta.get("model") or args.model
@@ -260,6 +308,7 @@ def anomaly_warnings(
     if previous_model and current_model and previous_model != current_model:
         reset_like = True
 
+    suspicious_drop = False
     if previous:
         prev_tokens = parse_int(previous.get("contextTokens"))
         prev_limit = parse_int(previous.get("contextLimit"))
@@ -268,11 +317,13 @@ def anomaly_warnings(
             warnings.append(f"⚠️ Context limit changed：{format_k_tokens(prev_limit)} → {format_k_tokens(context_limit)}（{hint}）。")
         if prev_tokens is not None and context_tokens is not None:
             large_drop = prev_tokens >= args.drop_min_previous and context_tokens <= prev_tokens * args.drop_ratio
-            if large_drop and not reset_like:
+            suspicious_drop = bool(large_drop and not reset_like)
+            if suspicious_drop:
                 warnings.append(
                     f"⚠️ Context token suspicious drop：{format_k_tokens(prev_tokens)} → {format_k_tokens(context_tokens)}，可能拿到單次回覆 token 或選錯 session。"
                 )
 
+    sample_trusted = bool(source_trusted and not suspicious_drop)
     current_record = {
         "time": int(time.time()),
         "sessionKey": session_key,
@@ -282,8 +333,10 @@ def anomaly_warnings(
         "model": current_model,
         "runtime": status_meta.get("runtime") or args.runtime,
         "compactions": current_compactions,
+        "trusted": sample_trusted,
+        "historyUpdated": bool(sample_trusted and not args.no_history),
     }
-    if not args.no_history:
+    if not args.no_history and sample_trusted:
         history[session_key] = current_record
         save_history(args.history_json, history)
     return warnings, previous, current_record

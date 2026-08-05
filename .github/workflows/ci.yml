@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile Python
+        run: python3 -m py_compile skills/session-token-monitor/scripts/*.py scripts/*.py tests/*.py
+      - name: Run synthetic regression tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Verify packaged skill
+        run: python3 scripts/build_skill_archive.py --check
+      - name: Reject whitespace errors
+        run: git diff --check
