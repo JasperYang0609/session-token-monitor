@@ -41,7 +41,7 @@ A `.skill` file is a zip archive. If your OpenClaw setup does not provide a dire
 
 ## Diagnostics and anomaly warnings
 
-The helper refuses to guess current context pressure from per-call usage fields. It can parse runtime status text via `--status-text` / `--status-file`, keeps a small local history by default, and warns when context tokens suddenly drop or context limits change mid-session. Use `--audit-log <path>` for customer troubleshooting.
+The helper refuses to guess current context pressure from per-call usage fields. It can parse runtime status text via `--status-text` / `--status-file`, keeps a small local history by default, and warns when context tokens suddenly drop or context limits change mid-session. Only trusted runtime/CLI samples update history; unknown, weak-source, or unexplained-drop samples leave the last-known-good record intact. History and audit files are owner-only, and history updates use atomic replacement. Use `--audit-log <path>` for customer troubleshooting.
 
 ## Agent hook
 
@@ -79,3 +79,13 @@ python3 skills/session-token-monitor/scripts/session_footer.py \
 ```
 
 Without `--session-key`, `--channel-id`, or `--to`, the helper fails closed unless `--allow-latest` is explicitly provided.
+
+## Maintainer verification
+
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py' -v
+python3 -m py_compile skills/session-token-monitor/scripts/*.py scripts/*.py tests/*.py
+python3 scripts/build_skill_archive.py --check
+```
+
+Rebuild the packaged skill after source changes with `python3 scripts/build_skill_archive.py`.

@@ -98,7 +98,7 @@ Use `scripts/session_footer.py` to generate the transcript/context footer. Impor
 
 The script reads OpenClaw's local session index by default: `~/.openclaw/agents/main/sessions/sessions.json`. By default it refuses to guess the current session; pass an exact selector. It also refuses to infer current context pressure from `totalTokens`.
 
-The helper now keeps a small local history at `~/.openclaw/session-token-monitor/history.json` by default. It uses this only to detect suspicious changes, such as context tokens suddenly dropping without a compaction/model switch or context limits changing mid-session. Use `--no-history` to disable this.
+The helper keeps a small local history at `~/.openclaw/session-token-monitor/history.json` by default. It uses this only to detect suspicious changes, such as context tokens suddenly dropping without a compaction/model switch or context limits changing mid-session. Only trusted runtime-status or explicit CLI samples update this baseline; unknown, weak-source, and unexplained-drop samples are reported but do not overwrite the last-known-good record. History updates are atomic and owner-only (`0600`). Use `--no-history` to disable this.
 
 Example when runtime status says `📚 Context: 101k/272k`:
 
@@ -116,7 +116,8 @@ The helper emits inline warnings before the footer when it detects suspicious co
 - `Context token unavailable` — no reliable runtime context was provided, so it refuses to guess.
 - `Context token source suspicious` — values came from a weak source instead of runtime status.
 - `Context limit changed` — the same session's limit changed, often due to model switch or runtime reporting changes.
-- `Context token suspicious drop` — tokens dropped sharply without a known compaction/model switch; this often means a per-call reply token was used by mistake or the wrong session was selected.
+- `Context token suspicious drop` — tokens dropped sharply without a known compaction/model switch; this often means a per-call reply token was used by mistake or the wrong session was selected. The suspicious sample is not promoted to trusted history.
+- `Context source conflict` — runtime status and explicit CLI values disagree; runtime status wins.
 
 For customer debugging, run with `--audit-log logs/session-token-monitor.jsonl` so each footer writes a compact JSON record with time, session key, model, runtime, context tokens, context limit, source, compaction count, and warnings.
 
