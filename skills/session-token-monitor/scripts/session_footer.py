@@ -159,21 +159,6 @@ def format_k_tokens(value: Optional[int]) -> str:
     return f"{k:.1f}K"
 
 
-def context_alert(context_tokens: Optional[int]) -> Optional[str]:
-    if context_tokens is None:
-        return None
-    label = format_k_tokens(context_tokens)
-    if context_tokens > 200_000:
-        return "🔴 強烈建議先總結 + 備份 + reset"
-    if context_tokens > 150_000:
-        return f"⚠️ 本頻道 session 已達 {label}，建議重置"
-    if context_tokens > 130_000:
-        return f"⚡ 本對話已累積 {label} tokens。"
-    if context_tokens > 100_000:
-        return f"⚡ 本對話已累積 {label} tokens。"
-    return None
-
-
 def load_history(path: str) -> Dict[str, Any]:
     p = Path(os.path.expanduser(path))
     if not p.exists():
@@ -368,12 +353,13 @@ def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
         context_line = f"📊 Context: {format_k_tokens(context_tokens)} / {format_k_tokens(context_limit)}"
     else:
         context_line = f"📊 Context: {format_k_tokens(context_tokens)} tokens"
-    alert_line = context_alert(context_tokens)
+    # Routine context-capacity warnings are intentionally disabled. Native
+    # compaction and handoff own continuity; the footer remains informational.
+    # Preserve the JSON field for consumers that already parse it.
+    alert_line = None
     warnings, previous, current_record = anomaly_warnings(key, context_tokens, context_limit, token_source, status_meta, args)
 
     lines = []
-    if alert_line:
-        lines.append(alert_line)
     lines.extend(warnings)
     if transcript_line:
         lines.append(transcript_line)

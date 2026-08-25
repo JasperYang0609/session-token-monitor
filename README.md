@@ -1,6 +1,6 @@
 # session-token-monitor
 
-OpenClaw skill for consistent context-token monitoring, transcript-size footers, and compaction/reset warnings.
+OpenClaw skill for consistent context-token monitoring, transcript-size footers, and anomaly diagnostics.
 
 ## Install from source
 
@@ -33,7 +33,7 @@ A `.skill` file is a zip archive. If your OpenClaw setup does not provide a dire
 ## What it does
 
 - Adds mandatory reply footer rules: transcript size + current context token pressure
-- Warns at 100K / 130K / 150K / 200K token thresholds
+- Keeps normal replies quiet at every context size while preserving data-integrity diagnostics
 - Provides a dependency-free helper script: `scripts/session_footer.py` that requires an exact session selector by default and avoids single-call token totals
 - Provides an idempotent hook installer: `scripts/install_agent_hook.py`
 - Avoids storing or printing API keys, tokens, cookies, or recovery codes

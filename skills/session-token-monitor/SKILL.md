@@ -1,13 +1,13 @@
 ---
 name: session-token-monitor
-description: Mandatory OpenClaw reply-footer workflow for every user-visible response: monitor conversation token pressure and transcript size, append consistent token/transcript footers, warn before context compaction/reset risk, and report short-term/weekly usage when asked about session, token, context, compaction, reset, transcript size, usage quota, or LLM conversation health.
+description: Mandatory OpenClaw reply-footer workflow for every user-visible response: monitor conversation token pressure and transcript size, append consistent token/transcript footers, preserve anomaly diagnostics, and report short-term/weekly usage when asked about session, token, context, compaction, reset, transcript size, usage quota, or LLM conversation health.
 ---
 
 # Session Token Monitor
 
 ## Purpose
 
-Use this skill to keep OpenClaw conversations healthy as they grow. It standardizes session token footers, transcript-size classification, warning thresholds before compaction/reset risk, and concise status answers.
+Use this skill to keep OpenClaw conversations observable as they grow. It standardizes session token footers, transcript-size classification, anomaly diagnostics, and concise status answers without routine capacity warnings.
 
 This skill is intentionally simple and model-agnostic: any LLM can follow it.
 
@@ -31,8 +31,6 @@ Footer format:
 📝 Transcript: <size> MB｜<level>
 📊 Context: <used> / <limit>
 ```
-
-If an alert applies, place it directly above the footer.
 
 Do **not** use per-call API usage fields, message `usage.totalTokens`, or ambiguous `sessions.json.totalTokens` as the context/session token count. Those fields may represent one model call rather than the current conversation context. If the runtime status is unavailable, show `📊 Context: unknown / <limit>` or `unknown tokens` instead of guessing.
 
@@ -61,20 +59,13 @@ The helper is idempotent: re-running it replaces only the marker block above. Fo
 - `3–6 MB` → `擁擠`
 - `> 6 MB` → `極限`
 
-## Token Warning Thresholds
+## Routine Capacity Alerts
 
-Use the current runtime context token count when available, not a single-call usage total.
-
-- `>100K` → `⚡ 本對話已累積 <XXK> tokens。`
-- `>130K` → `⚡ 本對話已累積 <XXK> tokens。`
-- `>150K` → `⚠️ 本頻道 session 已達 <XXK>，建議重置`
-- `>200K` → `🔴 強烈建議先總結 + 備份 + reset`
-
-Use the highest applicable warning only unless the user specifically asks for detailed status.
+Do not add routine 100K／130K／150K／200K capacity warnings above the footer. Native compaction and handoff own continuity; normal replies keep the two informational footer lines at every context size. Preserve anomaly diagnostics when the token source, session selection, context limit, or token movement is not trustworthy.
 
 ## When the User Asks About Session / Token / Quota
 
-Answer with current model/runtime if available, current context tokens and context limit, transcript size and level, 5-hour usage remaining/reset countdown, weekly usage remaining/reset countdown, and whether reset/summary is recommended.
+Answer with current model/runtime if available, current context tokens and context limit, transcript size and level, 5-hour usage remaining/reset countdown, and weekly usage remaining/reset countdown. Discuss reset or summary only when the user explicitly asks.
 
 Keep the answer concise. Do not expose private paths unless useful for debugging.
 

@@ -41,6 +41,13 @@ def args_for(tmp: Path, **overrides):
         "history_json": str(tmp / "history.json"),
         "drop_min_previous": 20_000,
         "drop_ratio": 0.5,
+        "sessions_json": str(tmp / "sessions.json"),
+        "session_key": "agent:main:discord:channel:synthetic",
+        "to": None,
+        "channel_id": None,
+        "allow_latest": False,
+        "strict": True,
+        "audit_log": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -101,15 +108,33 @@ class RuntimeSourceTests(unittest.TestCase):
         self.assertFalse(footer.is_trusted_token_source("runtime-status-extended"))
         self.assertFalse(footer.is_trusted_token_source("runtime-status-evil"))
 
-    def test_alert_threshold_boundaries_are_explicit(self):
-        self.assertIsNone(footer.context_alert(100_000))
-        self.assertIn("100K", footer.context_alert(100_001))
-        self.assertIn("130K", footer.context_alert(130_000))
-        self.assertIn("130K", footer.context_alert(130_001))
-        self.assertIn("150K", footer.context_alert(150_000))
-        self.assertIn("建議重置", footer.context_alert(150_001))
-        self.assertIn("建議重置", footer.context_alert(200_000))
-        self.assertIn("reset", footer.context_alert(200_001))
+    def test_former_alert_thresholds_keep_normal_footer_quiet(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            transcript = tmp / "session.jsonl"
+            transcript.write_text("{}\n", encoding="utf-8")
+            session_key = "agent:main:discord:channel:synthetic"
+            sessions = tmp / "sessions.json"
+            sessions.write_text(
+                json.dumps({session_key: {"sessionFile": str(transcript), "contextTokens": 272_000}}),
+                encoding="utf-8",
+            )
+
+            for tokens in (99_000, 100_000, 101_000, 130_000, 131_000, 150_000, 151_000, 200_000, 201_000):
+                with self.subTest(tokens=tokens):
+                    args = args_for(
+                        tmp,
+                        sessions_json=str(sessions),
+                        session_key=session_key,
+                        context_tokens=str(tokens),
+                        context_limit="272000",
+                        no_history=True,
+                    )
+                    payload = footer.build_payload(args)
+                    self.assertIsNone(payload["alertLine"])
+                    self.assertEqual(len(payload["lines"]), 2)
+                    self.assertTrue(payload["lines"][0].startswith("📝 Transcript:"))
+                    self.assertEqual(payload["lines"][1], f"📊 Context: {footer.format_k_tokens(tokens)} / 272K")
 
     def test_negative_token_number_fails_closed(self):
         self.assertIsNone(footer.parse_token_number("-5", "K"))
