@@ -89,3 +89,5 @@ python3 scripts/build_skill_archive.py --check
 ```
 
 Rebuild the packaged skill after source changes with `python3 scripts/build_skill_archive.py`.
+
+Before pushing, accumulate a reviewable change and run `bash scripts/check_push.sh`. Non-main branches run Branch Check; pull requests and `main` run full CI. An open PR suppresses duplicate branch tests, superseded runs are cancelled, and genuine failure notifications remain enabled.
