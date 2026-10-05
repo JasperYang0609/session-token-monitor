@@ -5,8 +5,10 @@ This helper intentionally treats transcript size and context-token pressure as
 separate signals:
 
 - transcript size comes from the local session jsonl file;
-- context tokens must come from a runtime/session-status source, status text, or
-  an explicit CLI override.
+- observed context tokens must come from a runtime/session-status source,
+  status text, or an explicit CLI override;
+- the displayed cumulative context is the trusted high-water mark within the
+  current session and compaction segment.
 
 Do not infer context pressure from per-call API usage fields such as
 ``totalTokens`` in message usage records. Those values can represent a single
@@ -288,7 +290,8 @@ def anomaly_warnings(
     token_source: str,
     status_meta: Dict[str, Any],
     args: argparse.Namespace,
-) -> Tuple[List[str], Optional[Dict[str, Any]], Dict[str, Any]]:
+    entry: Optional[Dict[str, Any]] = None,
+) -> Tuple[List[str], Optional[Dict[str, Any]], Dict[str, Any], Optional[int]]:
     warnings: List[str] = []
     history = {} if args.no_history else load_history(args.history_json)
     previous = history.get(session_key) if isinstance(history.get(session_key), dict) else None
@@ -303,34 +306,44 @@ def anomaly_warnings(
 
     current_compactions = status_meta.get("compactions")
     current_model = status_meta.get("model") or args.model
-    previous_compactions = previous.get("compactions") if previous else None
-    previous_model = previous.get("model") if previous else None
-    reset_like = False
-    if previous_compactions is not None and current_compactions is not None and current_compactions > previous_compactions:
-        reset_like = True
-    if previous_model and current_model and previous_model != current_model:
-        reset_like = True
+    previous_compactions = parse_int(previous.get("compactions")) if previous else None
+    current_session_id = str((entry or {}).get("sessionId") or "") or None
+    previous_session_id = previous.get("sessionId") if previous else None
+    session_changed = bool(previous_session_id and current_session_id and previous_session_id != current_session_id)
+    compaction_changed = bool(
+        previous_compactions is not None
+        and current_compactions is not None
+        and current_compactions != previous_compactions
+    )
 
-    suspicious_drop = False
     if previous:
-        prev_tokens = parse_int(previous.get("contextTokens"))
         prev_limit = parse_int(previous.get("contextLimit"))
         if prev_limit is not None and context_limit is not None and prev_limit != context_limit:
             hint = "可能是模型切換或 runtime 回報變動"
             warnings.append(f"⚠️ Context limit changed：{format_k_tokens(prev_limit)} → {format_k_tokens(context_limit)}（{hint}）。")
-        if prev_tokens is not None and context_tokens is not None:
-            large_drop = prev_tokens >= args.drop_min_previous and context_tokens <= prev_tokens * args.drop_ratio
-            suspicious_drop = bool(large_drop and not reset_like)
-            if suspicious_drop:
-                warnings.append(
-                    f"⚠️ Context token suspicious drop：{format_k_tokens(prev_tokens)} → {format_k_tokens(context_tokens)}，可能拿到單次回覆 token 或選錯 session。"
-                )
 
-    sample_trusted = bool(source_trusted and not suspicious_drop)
+    previous_cumulative = None
+    if previous and not session_changed and not compaction_changed:
+        previous_cumulative = parse_int(previous.get("cumulativeContextTokens"))
+        if previous_cumulative is None:
+            previous_cumulative = parse_int(previous.get("contextTokens"))
+
+    cumulative_context_tokens = context_tokens
+    if context_tokens is not None and previous_cumulative is not None:
+        cumulative_context_tokens = max(context_tokens, previous_cumulative)
+
+    sample_trusted = bool(source_trusted)
+    if not sample_trusted:
+        cumulative_context_tokens = None
     current_record = {
         "time": int(time.time()),
         "sessionKey": session_key,
-        "contextTokens": context_tokens,
+        "sessionId": current_session_id,
+        "observedContextTokens": context_tokens,
+        "cumulativeContextTokens": cumulative_context_tokens,
+        # Retain this field for compatibility with older history readers. It
+        # now matches the user-visible cumulative value.
+        "contextTokens": cumulative_context_tokens,
         "contextLimit": context_limit,
         "tokenSource": token_source,
         "model": current_model,
@@ -342,7 +355,7 @@ def anomaly_warnings(
     if not args.no_history and sample_trusted:
         history[session_key] = current_record
         save_history(args.history_json, history)
-    return warnings, previous, current_record
+    return warnings, previous, current_record, cumulative_context_tokens
 
 
 def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
@@ -370,16 +383,26 @@ def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
     compactions, compaction_source = resolve_compactions(status_meta, entry)
     status_meta["compactions"] = compactions
     status_meta["compactionSource"] = compaction_source
-    if context_limit is not None:
-        context_line = f"📊 Context: {format_k_tokens(context_tokens)} / {format_k_tokens(context_limit)}"
-    else:
-        context_line = f"📊 Context: {format_k_tokens(context_tokens)} tokens"
     compaction_line = f"🧹 對話壓縮：{compactions} 次"
     # Routine context-capacity warnings are intentionally disabled. Native
     # compaction and handoff own continuity; the footer remains informational.
     # Preserve the JSON field for consumers that already parse it.
     alert_line = None
-    warnings, previous, current_record = anomaly_warnings(key, context_tokens, context_limit, token_source, status_meta, args)
+    warnings, previous, current_record, cumulative_context_tokens = anomaly_warnings(
+        key,
+        context_tokens,
+        context_limit,
+        token_source,
+        status_meta,
+        args,
+        entry,
+    )
+    context_label = "本輪 Context" if args.no_history else "累積 Context"
+    displayed_context_tokens = context_tokens if args.no_history else cumulative_context_tokens
+    if context_limit is not None:
+        context_line = f"📊 {context_label}：{format_k_tokens(displayed_context_tokens)} / {format_k_tokens(context_limit)}"
+    else:
+        context_line = f"📊 {context_label}：{format_k_tokens(displayed_context_tokens)} tokens"
 
     lines = []
     lines.extend(warnings)
@@ -394,7 +417,9 @@ def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
         "sizeBytes": size_bytes,
         "sizeMb": round(size_mb, 2) if size_mb is not None else None,
         "level": level,
-        "contextTokens": context_tokens,
+        "contextTokens": displayed_context_tokens,
+        "observedContextTokens": context_tokens,
+        "cumulativeContextTokens": cumulative_context_tokens,
         "contextLimit": context_limit,
         "tokenSource": token_source,
         "statusMeta": status_meta,

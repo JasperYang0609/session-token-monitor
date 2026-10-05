@@ -1,6 +1,6 @@
 # session-token-monitor
 
-OpenClaw skill for consistent context-token monitoring, transcript-size footers, and anomaly diagnostics.
+OpenClaw skill for cumulative session-context monitoring, transcript-size footers, and source diagnostics.
 
 ## Recommended install
 
@@ -55,7 +55,7 @@ A `.skill` file is a zip archive. If your OpenClaw setup does not provide a dire
 
 ## What it does
 
-- Adds mandatory reply footer rules: transcript size + current context token pressure + current-session compaction count
+- Adds mandatory reply footer rules: transcript size + cumulative Context high-water + current-session compaction count
 - Keeps normal replies quiet at every context size while preserving data-integrity diagnostics
 - Provides a dependency-free helper script: `scripts/session_footer.py` that requires an exact session selector by default and avoids single-call token totals
 - Provides an idempotent hook installer: `scripts/install_agent_hook.py`
@@ -64,7 +64,7 @@ A `.skill` file is a zip archive. If your OpenClaw setup does not provide a dire
 
 ## Diagnostics and anomaly warnings
 
-The helper refuses to guess current context pressure from per-call usage fields. It can parse runtime status text via `--status-text` / `--status-file`, keeps a small local history by default, and warns when context tokens suddenly drop or context limits change mid-session. Only trusted runtime/CLI samples update history; unknown, weak-source, or unexplained-drop samples leave the last-known-good record intact. History and audit files are owner-only, and history updates use atomic replacement. Use `--audit-log <path>` for customer troubleshooting.
+The helper refuses to guess cumulative context from per-call usage fields. It parses a fresh runtime Context sample via `--status-text` / `--status-file`, then keeps the highest trusted sample for the current Session and compaction segment. Lower samples do not make the footer go backward. Reset/new Session or a changed compaction count starts a new segment. History and audit files are owner-only, and history updates use atomic replacement. Use `--audit-log <path>` for customer troubleshooting.
 
 ## Agent hook
 
@@ -72,7 +72,7 @@ The installer adds this marker block to `AGENTS.md` or another always-loaded ins
 
 ```md
 <!-- session-token-monitor:start -->
-Before every user-visible reply, use the `session-token-monitor` skill and append its transcript/context/compaction footer. Treat this as a required pre-send gate; if footer collection fails, report the short failure instead of guessing.
+Before every user-visible reply, use the `session-token-monitor` skill and append its transcript/cumulative-context/compaction footer. Treat this as a required pre-send gate; if footer collection fails, report the short failure instead of guessing.
 <!-- session-token-monitor:end -->
 ```
 
@@ -90,7 +90,7 @@ API-assisted maintenance should focus on issue triage, regression tests, documen
 
 ## Token source rules
 
-Use runtime/session status `📚 Context: <used>/<limit>` as the source of truth for context pressure. Do not display message API `usage.totalTokens` or ambiguous session-index `totalTokens` as the current session size; those can represent a single model call. The compaction footer uses the fresh status value when supplied, otherwise the exactly selected session's `compactionCount`, matching OpenClaw's native status behavior.
+Use runtime/session status `📚 Context: <used>/<limit>` as the source for each observed sample. The footer displays the trusted high-water mark since the current Session or compaction segment began; it is not a sum of repeated API usage. Do not display message API `usage.totalTokens` as cumulative context. The compaction footer uses the fresh status value when supplied, otherwise the exactly selected session's `compactionCount`, matching OpenClaw's native status behavior.
 
 For automation, pass parsed runtime values into the helper:
 

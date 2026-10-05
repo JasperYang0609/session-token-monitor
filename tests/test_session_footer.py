@@ -148,7 +148,7 @@ class RuntimeSourceTests(unittest.TestCase):
                     self.assertIsNone(payload["alertLine"])
                     self.assertEqual(len(payload["lines"]), 3)
                     self.assertTrue(payload["lines"][0].startswith("📝 Transcript:"))
-                    self.assertEqual(payload["lines"][1], f"📊 Context: {footer.format_k_tokens(tokens)} / 272K")
+                    self.assertEqual(payload["lines"][1], f"📊 本輪 Context：{footer.format_k_tokens(tokens)} / 272K")
                     self.assertEqual(payload["lines"][2], "🧹 對話壓縮：0 次")
 
     def test_footer_displays_selected_session_compaction_count(self):
@@ -209,6 +209,9 @@ class TrustedHistoryTests(unittest.TestCase):
         self.previous = {
             "time": 1,
             "sessionKey": self.session_key,
+            "sessionId": "session-a",
+            "observedContextTokens": 120_000,
+            "cumulativeContextTokens": 120_000,
             "contextTokens": 120_000,
             "contextLimit": 272_000,
             "tokenSource": "runtime-status",
@@ -227,62 +230,144 @@ class TrustedHistoryTests(unittest.TestCase):
         return json.loads(Path(self.args.history_json).read_text(encoding="utf-8"))[self.session_key]
 
     def test_unknown_sample_does_not_overwrite_last_good(self):
-        warnings, previous, current = footer.anomaly_warnings(
-            self.session_key, None, 272_000, "unknown", {}, self.args
+        warnings, previous, current, cumulative = footer.anomaly_warnings(
+            self.session_key, None, 272_000, "unknown", {}, self.args, {"sessionId": "session-a"}
         )
         self.assertEqual(previous["contextTokens"], 120_000)
         self.assertFalse(current["trusted"])
         self.assertFalse(current["historyUpdated"])
+        self.assertIsNone(cumulative)
         self.assertIn("unavailable", " ".join(warnings))
         self.assertEqual(self.load_saved(), self.previous)
 
     def test_suspicious_source_does_not_overwrite_last_good(self):
-        warnings, _, current = footer.anomaly_warnings(
-            self.session_key, 2_000, 272_000, "message-usage", {}, self.args
+        warnings, _, current, cumulative = footer.anomaly_warnings(
+            self.session_key, 2_000, 272_000, "message-usage", {}, self.args, {"sessionId": "session-a"}
         )
         self.assertFalse(current["trusted"])
+        self.assertIsNone(cumulative)
         self.assertIn("source suspicious", " ".join(warnings))
         self.assertEqual(self.load_saved(), self.previous)
 
-    def test_unexplained_large_drop_warns_and_preserves_history(self):
-        warnings, _, current = footer.anomaly_warnings(
+    def test_lower_runtime_sample_preserves_cumulative_high_water(self):
+        warnings, _, current, cumulative = footer.anomaly_warnings(
             self.session_key,
             20_000,
             272_000,
             "runtime-status",
             {"model": "model-a", "compactions": 0},
             self.args,
+            {"sessionId": "session-a"},
         )
-        self.assertFalse(current["trusted"])
-        self.assertIn("suspicious drop", " ".join(warnings))
-        self.assertEqual(self.load_saved(), self.previous)
+        self.assertTrue(current["trusted"])
+        self.assertEqual(warnings, [])
+        self.assertEqual(cumulative, 120_000)
+        self.assertEqual(self.load_saved()["observedContextTokens"], 20_000)
+        self.assertEqual(self.load_saved()["cumulativeContextTokens"], 120_000)
 
     def test_compaction_explains_drop_and_updates_history(self):
-        warnings, _, current = footer.anomaly_warnings(
+        warnings, _, current, cumulative = footer.anomaly_warnings(
             self.session_key,
             20_000,
             272_000,
             "runtime-status",
             {"model": "model-a", "compactions": 1},
             self.args,
+            {"sessionId": "session-a"},
         )
         self.assertTrue(current["trusted"])
         self.assertNotIn("suspicious drop", " ".join(warnings))
+        self.assertEqual(cumulative, 20_000)
         self.assertEqual(self.load_saved()["contextTokens"], 20_000)
 
+    def test_new_session_id_resets_cumulative_high_water(self):
+        warnings, _, current, cumulative = footer.anomaly_warnings(
+            self.session_key,
+            15_000,
+            272_000,
+            "runtime-status",
+            {"model": "model-a", "compactions": 0},
+            self.args,
+            {"sessionId": "session-b"},
+        )
+        self.assertTrue(current["trusted"])
+        self.assertEqual(warnings, [])
+        self.assertEqual(cumulative, 15_000)
+        self.assertEqual(self.load_saved()["sessionId"], "session-b")
+
+    def test_higher_runtime_sample_advances_cumulative_value(self):
+        warnings, _, current, cumulative = footer.anomaly_warnings(
+            self.session_key,
+            150_000,
+            272_000,
+            "runtime-status",
+            {"model": "model-a", "compactions": 0},
+            self.args,
+            {"sessionId": "session-a"},
+        )
+        self.assertTrue(current["trusted"])
+        self.assertEqual(warnings, [])
+        self.assertEqual(cumulative, 150_000)
+        self.assertEqual(self.load_saved()["cumulativeContextTokens"], 150_000)
+
+    def test_user_reported_189k_to_95k_keeps_189k_in_footer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            transcript = tmp / "session.jsonl"
+            transcript.write_text("{}\n", encoding="utf-8")
+            sessions = tmp / "sessions.json"
+            sessions.write_text(
+                json.dumps(
+                    {
+                        self.session_key: {
+                            "sessionFile": str(transcript),
+                            "sessionId": "session-a",
+                            "contextTokens": 272_000,
+                            "compactionCount": 0,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            history = tmp / "history.json"
+            first = footer.build_payload(
+                args_for(
+                    tmp,
+                    sessions_json=str(sessions),
+                    history_json=str(history),
+                    context_tokens="189000",
+                    context_limit="272000",
+                )
+            )
+            second = footer.build_payload(
+                args_for(
+                    tmp,
+                    sessions_json=str(sessions),
+                    history_json=str(history),
+                    context_tokens="95000",
+                    context_limit="272000",
+                )
+            )
+
+        self.assertEqual(first["contextLine"], "📊 累積 Context：189K / 272K")
+        self.assertEqual(second["observedContextTokens"], 95_000)
+        self.assertEqual(second["contextLine"], "📊 累積 Context：189K / 272K")
+
     def test_model_switch_explains_drop_and_limit_change(self):
-        warnings, _, current = footer.anomaly_warnings(
+        warnings, _, current, cumulative = footer.anomaly_warnings(
             self.session_key,
             20_000,
             200_000,
             "runtime-status",
             {"model": "model-b", "compactions": 0},
             self.args,
+            {"sessionId": "session-a"},
         )
         self.assertTrue(current["trusted"])
         joined = " ".join(warnings)
         self.assertNotIn("suspicious drop", joined)
         self.assertIn("limit changed", joined)
+        self.assertEqual(cumulative, 120_000)
 
     def test_history_replace_is_private_and_leaves_no_temporary_file(self):
         path = Path(self.args.history_json)
@@ -295,17 +380,19 @@ class TrustedHistoryTests(unittest.TestCase):
     def test_corrupt_history_fails_soft_then_recovers(self):
         path = Path(self.args.history_json)
         path.write_text("{broken", encoding="utf-8")
-        warnings, previous, current = footer.anomaly_warnings(
+        warnings, previous, current, cumulative = footer.anomaly_warnings(
             self.session_key,
             80_000,
             272_000,
             "runtime-status",
             {"model": "model-a", "compactions": 0},
             self.args,
+            {"sessionId": "session-a"},
         )
         self.assertIsNone(previous)
         self.assertEqual(warnings, [])
         self.assertTrue(current["trusted"])
+        self.assertEqual(cumulative, 80_000)
         self.assertEqual(self.load_saved()["contextTokens"], 80_000)
 
     def test_audit_file_is_private(self):
