@@ -2,23 +2,46 @@
 
 OpenClaw skill for consistent context-token monitoring, transcript-size footers, and anomaly diagnostics.
 
-## Install from source
+## Recommended install
 
-Copy the skill folder into an OpenClaw workspace:
+The installer makes the decisions for you: it finds the workspace, preserves
+existing agent rules, backs up an older install, installs the skill and hook,
+then verifies both before reporting success.
 
 ```bash
-mkdir -p /path/to/openclaw-workspace/skills
-cp -R skills/session-token-monitor /path/to/openclaw-workspace/skills/
+python3 install.py
 ```
 
-Then install the minimal agent hook so every reply remembers to show the footer:
+If OpenClaw uses a non-default workspace:
+
+```bash
+python3 install.py --workspace /path/to/openclaw-workspace
+```
+
+Only treat the install as successful when the command prints both `INSTALL_OK`
+and `VERIFY_OK`. Then start a new session or reload OpenClaw so the skill catalog
+refreshes.
+
+For AI agents, use the installer instead of copying files or editing `AGENTS.md`
+manually. If installation fails, report the single `INSTALL_FAILED` line; do not
+improvise a different install path.
+
+Verify an existing installation without changing it:
+
+```bash
+python3 install.py --check
+```
+
+## Manual install fallback
+
+If the automatic workspace detection cannot support a non-standard layout,
+copy `skills/session-token-monitor` into the workspace `skills/` directory,
+then run its hook installer:
 
 ```bash
 cd /path/to/openclaw-workspace
 python3 skills/session-token-monitor/scripts/install_agent_hook.py AGENTS.md
 ```
-
-Then start a new session or restart/reload OpenClaw so the skill catalog refreshes.
 
 ## Install from packaged skill
 

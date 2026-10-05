@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Compile Python
-        run: python3 -m py_compile skills/session-token-monitor/scripts/*.py scripts/*.py tests/*.py
+        run: python3 -m py_compile install.py skills/session-token-monitor/scripts/*.py scripts/*.py tests/*.py
       - name: Run synthetic regression tests
         run: python3 -m unittest discover -s tests -p 'test_*.py' -v
       - name: Verify packaged skill
