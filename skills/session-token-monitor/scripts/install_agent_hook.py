@@ -9,7 +9,7 @@ from pathlib import Path
 START = "<!-- session-token-monitor:start -->"
 END = "<!-- session-token-monitor:end -->"
 BLOCK = f"""{START}
-Before every user-visible reply, use the `session-token-monitor` skill and append its token/transcript footer. Treat this as a required pre-send gate: fetch fresh runtime/session status every time, pass the current `📚 Context: used/limit` into the footer helper, never reuse prior token/limit values, and never use per-call `usage.totalTokens` or `sessions.json.totalTokens` as current context pressure. If footer collection fails, report the short failure instead of guessing.
+Before every user-visible reply, use the `session-token-monitor` skill and append its transcript/context/compaction footer. Treat this as a required pre-send gate: fetch fresh runtime/session status every time, pass the current `📚 Context: used/limit` into the footer helper, use the exactly selected session's compaction count, never reuse prior token/limit values, and never use per-call `usage.totalTokens` or `sessions.json.totalTokens` as current context pressure. If footer collection fails, report the short failure instead of guessing.
 {END}
 """
 

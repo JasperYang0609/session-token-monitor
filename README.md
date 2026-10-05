@@ -32,7 +32,7 @@ A `.skill` file is a zip archive. If your OpenClaw setup does not provide a dire
 
 ## What it does
 
-- Adds mandatory reply footer rules: transcript size + current context token pressure
+- Adds mandatory reply footer rules: transcript size + current context token pressure + current-session compaction count
 - Keeps normal replies quiet at every context size while preserving data-integrity diagnostics
 - Provides a dependency-free helper script: `scripts/session_footer.py` that requires an exact session selector by default and avoids single-call token totals
 - Provides an idempotent hook installer: `scripts/install_agent_hook.py`
@@ -49,7 +49,7 @@ The installer adds this marker block to `AGENTS.md` or another always-loaded ins
 
 ```md
 <!-- session-token-monitor:start -->
-Before every user-visible reply, use the `session-token-monitor` skill and append its token/transcript footer. Treat this as a required pre-send gate; if footer collection fails, report the short failure instead of guessing.
+Before every user-visible reply, use the `session-token-monitor` skill and append its transcript/context/compaction footer. Treat this as a required pre-send gate; if footer collection fails, report the short failure instead of guessing.
 <!-- session-token-monitor:end -->
 ```
 
@@ -67,7 +67,7 @@ API-assisted maintenance should focus on issue triage, regression tests, documen
 
 ## Token source rules
 
-Use runtime/session status `📚 Context: <used>/<limit>` as the source of truth for context pressure. Do not display message API `usage.totalTokens` or ambiguous session-index `totalTokens` as the current session size; those can represent a single model call.
+Use runtime/session status `📚 Context: <used>/<limit>` as the source of truth for context pressure. Do not display message API `usage.totalTokens` or ambiguous session-index `totalTokens` as the current session size; those can represent a single model call. The compaction footer uses the fresh status value when supplied, otherwise the exactly selected session's `compactionCount`, matching OpenClaw's native status behavior.
 
 For automation, pass parsed runtime values into the helper:
 

@@ -17,7 +17,7 @@ For every user-visible reply, collect session status and append a footer. Treat 
 
 Preferred sources, in order:
 
-1. Use the runtime/session status tool for current context pressure (`📚 Context: <used>/<limit>`).
+1. Use the runtime/session status tool for current context pressure (`📚 Context: <used>/<limit>`) and current-session compaction count.
 2. Run `scripts/session_footer.py` from this skill for transcript size, passing an exact `--session-key`, `--channel-id`, or `--to`.
 3. If neither works, state that the footer is unavailable; do not guess.
 
@@ -30,6 +30,7 @@ Footer format:
 ```text
 📝 Transcript: <size> MB｜<level>
 📊 Context: <used> / <limit>
+🧹 對話壓縮：<count> 次
 ```
 
 Do **not** use per-call API usage fields, message `usage.totalTokens`, or ambiguous `sessions.json.totalTokens` as the context/session token count. Those fields may represent one model call rather than the current conversation context. If the runtime status is unavailable, show `📊 Context: unknown / <limit>` or `unknown tokens` instead of guessing.
@@ -40,7 +41,7 @@ OpenClaw skills teach the model what to do, but a skill alone is not a global mi
 
 ```md
 <!-- session-token-monitor:start -->
-Before every user-visible reply, use the `session-token-monitor` skill and append its token/transcript footer. Treat this as a required pre-send gate: fetch fresh runtime/session status every time, pass the current `📚 Context: used/limit` into the footer helper, never reuse prior token/limit values, and never use per-call `usage.totalTokens` or `sessions.json.totalTokens` as current context pressure. If footer collection fails, report the short failure instead of guessing.
+Before every user-visible reply, use the `session-token-monitor` skill and append its transcript/context/compaction footer. Treat this as a required pre-send gate: fetch fresh runtime/session status every time, pass the current `📚 Context: used/limit` into the footer helper, use the exactly selected session's compaction count, never reuse prior token/limit values, and never use per-call `usage.totalTokens` or `sessions.json.totalTokens` as current context pressure. If footer collection fails, report the short failure instead of guessing.
 <!-- session-token-monitor:end -->
 ```
 
@@ -61,7 +62,7 @@ The helper is idempotent: re-running it replaces only the marker block above. Fo
 
 ## Routine Capacity Alerts
 
-Do not add routine 100K／130K／150K／200K capacity warnings above the footer. Native compaction and handoff own continuity; normal replies keep the two informational footer lines at every context size. Preserve anomaly diagnostics when the token source, session selection, context limit, or token movement is not trustworthy.
+Do not add routine 100K／130K／150K／200K capacity warnings above the footer. Native compaction and handoff own continuity; normal replies keep the three informational footer lines at every context size. Preserve anomaly diagnostics when the token source, session selection, context limit, or token movement is not trustworthy.
 
 ## When the User Asks About Session / Token / Quota
 
@@ -89,7 +90,7 @@ Use `scripts/session_footer.py` to generate the transcript/context footer. Impor
 
 The script reads OpenClaw's local session index by default: `~/.openclaw/agents/main/sessions/sessions.json`. By default it refuses to guess the current session; pass an exact selector. It also refuses to infer current context pressure from `totalTokens`.
 
-The helper keeps a small local history at `~/.openclaw/session-token-monitor/history.json` by default. It uses this only to detect suspicious changes, such as context tokens suddenly dropping without a compaction/model switch or context limits changing mid-session. Only trusted runtime-status or explicit CLI samples update this baseline; unknown, weak-source, and unexplained-drop samples are reported but do not overwrite the last-known-good record. History updates are atomic and owner-only (`0600`). Use `--no-history` to disable this.
+The helper keeps a small local history at `~/.openclaw/session-token-monitor/history.json` by default. It uses this only to detect suspicious changes, such as context tokens suddenly dropping without a compaction/model switch or context limits changing mid-session. The displayed compaction count comes from fresh runtime status when supplied, otherwise from the exactly selected session entry; this mirrors OpenClaw's native status behavior and defaults a missing session value to zero. Only trusted runtime-status or explicit CLI samples update this baseline; unknown, weak-source, and unexplained-drop samples are reported but do not overwrite the last-known-good record. History updates are atomic and owner-only (`0600`). Use `--no-history` to disable this.
 
 Example when runtime status says `📚 Context: 101k/272k`:
 
@@ -114,7 +115,7 @@ For customer debugging, run with `--audit-log logs/session-token-monitor.jsonl` 
 
 ## Fallback Rules
 
-If context token count is missing but transcript size is known, still show the transcript line and show `📊 Context: unknown / <limit>` when a limit is known, or `📊 Context: unknown tokens`.
+If context token count is missing but transcript size is known, still show the transcript line, show `📊 Context: unknown / <limit>` when a limit is known (or `📊 Context: unknown tokens`), and retain the selected session's compaction line.
 
 If transcript size is missing but runtime status has context tokens, omit the transcript line and show the context line.
 

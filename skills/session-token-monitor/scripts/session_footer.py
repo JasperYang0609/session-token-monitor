@@ -263,6 +263,24 @@ def resolve_context_tokens(args: argparse.Namespace, entry: Dict[str, Any]) -> T
     return context_tokens, context_limit, source, status_meta
 
 
+def resolve_compactions(status_meta: Dict[str, Any], entry: Dict[str, Any]) -> Tuple[int, str]:
+    """Return the selected session's compaction count and source.
+
+    OpenClaw's native status card reads ``compactionCount`` from the selected
+    session entry and treats a missing value as zero. Prefer a freshly parsed
+    runtime-status value when present, then mirror that native fallback.
+    """
+    runtime_value = parse_int(status_meta.get("compactions"))
+    if runtime_value is not None:
+        return runtime_value, "runtime-status"
+
+    session_value = parse_int(entry.get("compactionCount"))
+    if session_value is not None:
+        return session_value, "session-index"
+
+    return 0, "session-index-default"
+
+
 def anomaly_warnings(
     session_key: str,
     context_tokens: Optional[int],
@@ -349,10 +367,14 @@ def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
                 raise FileNotFoundError(f"cannot stat sessionFile: {expanded}: {exc}") from exc
 
     context_tokens, context_limit, token_source, status_meta = resolve_context_tokens(args, entry)
+    compactions, compaction_source = resolve_compactions(status_meta, entry)
+    status_meta["compactions"] = compactions
+    status_meta["compactionSource"] = compaction_source
     if context_limit is not None:
         context_line = f"📊 Context: {format_k_tokens(context_tokens)} / {format_k_tokens(context_limit)}"
     else:
         context_line = f"📊 Context: {format_k_tokens(context_tokens)} tokens"
+    compaction_line = f"🧹 對話壓縮：{compactions} 次"
     # Routine context-capacity warnings are intentionally disabled. Native
     # compaction and handoff own continuity; the footer remains informational.
     # Preserve the JSON field for consumers that already parse it.
@@ -364,6 +386,7 @@ def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
     if transcript_line:
         lines.append(transcript_line)
     lines.append(context_line)
+    lines.append(compaction_line)
 
     payload = {
         "sessionKey": key,
@@ -379,6 +402,9 @@ def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
         "warnings": warnings,
         "transcriptLine": transcript_line,
         "contextLine": context_line,
+        "compactions": compactions,
+        "compactionSource": compaction_source,
+        "compactionLine": compaction_line,
         "alertLine": alert_line,
         "lines": lines,
     }

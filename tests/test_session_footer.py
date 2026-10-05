@@ -100,6 +100,20 @@ class RuntimeSourceTests(unittest.TestCase):
         self.assertEqual(meta["cliContextConflict"], 10)
         self.assertEqual(meta["cliLimitConflict"], 100)
 
+    def test_compaction_count_prefers_runtime_status_then_session_entry(self):
+        self.assertEqual(
+            footer.resolve_compactions({"compactions": 4}, {"compactionCount": 2}),
+            (4, "runtime-status"),
+        )
+        self.assertEqual(
+            footer.resolve_compactions({}, {"compactionCount": 2}),
+            (2, "session-index"),
+        )
+        self.assertEqual(
+            footer.resolve_compactions({}, {}),
+            (0, "session-index-default"),
+        )
+
     def test_only_exact_source_labels_are_trusted(self):
         self.assertTrue(footer.is_trusted_token_source("runtime-status"))
         self.assertTrue(footer.is_trusted_token_source("cli"))
@@ -132,9 +146,44 @@ class RuntimeSourceTests(unittest.TestCase):
                     )
                     payload = footer.build_payload(args)
                     self.assertIsNone(payload["alertLine"])
-                    self.assertEqual(len(payload["lines"]), 2)
+                    self.assertEqual(len(payload["lines"]), 3)
                     self.assertTrue(payload["lines"][0].startswith("📝 Transcript:"))
                     self.assertEqual(payload["lines"][1], f"📊 Context: {footer.format_k_tokens(tokens)} / 272K")
+                    self.assertEqual(payload["lines"][2], "🧹 對話壓縮：0 次")
+
+    def test_footer_displays_selected_session_compaction_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            transcript = tmp / "session.jsonl"
+            transcript.write_text("{}\n", encoding="utf-8")
+            session_key = "agent:main:discord:channel:synthetic"
+            sessions = tmp / "sessions.json"
+            sessions.write_text(
+                json.dumps(
+                    {
+                        session_key: {
+                            "sessionFile": str(transcript),
+                            "contextTokens": 272_000,
+                            "compactionCount": 3,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = args_for(
+                tmp,
+                sessions_json=str(sessions),
+                session_key=session_key,
+                context_tokens="120000",
+                context_limit="272000",
+                no_history=True,
+            )
+            payload = footer.build_payload(args)
+
+        self.assertEqual(payload["compactions"], 3)
+        self.assertEqual(payload["compactionSource"], "session-index")
+        self.assertEqual(payload["compactionLine"], "🧹 對話壓縮：3 次")
+        self.assertEqual(payload["lines"][-1], "🧹 對話壓縮：3 次")
 
     def test_negative_token_number_fails_closed(self):
         self.assertIsNone(footer.parse_token_number("-5", "K"))
