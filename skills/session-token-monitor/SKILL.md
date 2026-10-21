@@ -1,6 +1,6 @@
 ---
 name: session-token-monitor
-description: Mandatory OpenClaw reply-footer workflow for every user-visible response: monitor cumulative session context and transcript size, append consistent token/transcript footers, preserve source diagnostics, and report short-term/weekly usage when asked about session, token, context, compaction, reset, transcript size, usage quota, or LLM conversation health.
+description: "Mandatory OpenClaw reply-footer workflow for every user-visible response: monitor cumulative session context and transcript size, append consistent token/transcript footers, preserve source diagnostics, and report short-term/weekly usage when asked about session, token, context, compaction, reset, transcript size, usage quota, or LLM conversation health."
 ---
 
 # Session Token Monitor
@@ -35,7 +35,9 @@ Footer format:
 
 `累積 Context` means the highest trusted runtime Context sample observed since this Session started or since its latest OpenClaw compaction. Lower samples do not make the displayed value go backward. A reset/new Session or a changed compaction count starts a new accumulation segment from the next trusted sample. It is not the sum of every API call and does not double-count repeated prompt tokens.
 
-Do **not** use per-call API usage fields, message `usage.totalTokens`, or ambiguous `sessions.json.totalTokens` as the cumulative context count. If the runtime status is unavailable, show `📊 累積 Context：unknown / <limit>` or `unknown tokens` instead of guessing.
+If that cumulative value exceeds the reported limit, render `📊 累積 Context：<high-water>｜上限待核對`. Preserve the raw limit in JSON diagnostics, but do not present a contradictory ratio as verified capacity or guess a replacement limit.
+
+Do **not** use per-call API usage fields, message `usage.totalTokens`, or ambiguous `sessions.json.totalTokens` as the cumulative context count. If the runtime status is unavailable, show `📊 累積 Context：待回報 / <limit>` or `待回報` instead of guessing.
 
 ## Install-Time Agent Hook
 
@@ -89,8 +91,11 @@ Use `scripts/session_footer.py` to generate the transcript/context footer. Impor
 - `--no-history` to disable accumulation and report only `本輪 Context`
 - `--allow-latest` to opt in to fallback by most recent session; avoid this for live reply footers
 - `--sessions-json /path/to/sessions.json` to override the default session index
+- `--sessions-db /path/to/openclaw-agent.sqlite` for an explicit read-only canonical store (mutually exclusive with `--sessions-json`)
 
-The script reads OpenClaw's local session index by default: `~/.openclaw/agents/main/sessions/sessions.json`. By default it refuses to guess the current session; pass an exact selector. It also refuses to infer cumulative context from ambiguous per-call `totalTokens` values.
+When `~/.openclaw/agents/main/agent/openclaw-agent.sqlite` exists, it is authoritative and requires an exact `--session-key`; channel/recipient/latest selectors never scan the database. The helper reads only the current generation session ID, compaction count, and logical transcript-byte aggregates, never persisted Context/usage totals. Connections are read-only and no migrations run. A broken store or absent key never falls back to stale migration JSON. Explicit `--sessions-json` keeps legacy/offline selection available; without a canonical database the default is `~/.openclaw/agents/main/sessions/sessions.json`.
+
+Always keep the compaction footer, including `0 次`. Fresh runtime status wins; otherwise use the exact current generation's `compactionCount`. Missing/null counts follow native status behavior (zero), but malformed values remain `unknown`, not a fabricated zero. Do not sum old generations. Unavailable transcript-byte measurement does not hide a known count.
 
 The helper keeps a small local history at `~/.openclaw/session-token-monitor/history.json` by default. It stores the latest observed sample and the cumulative high-water mark for each exact Session. Ordinary lower runtime samples do not reduce the displayed cumulative value. A new Session ID or a changed OpenClaw compaction count resets the segment to the new trusted sample. The displayed compaction count comes from fresh runtime status when supplied, otherwise from the exactly selected session entry. Only trusted runtime-status or explicit CLI samples update history. History updates are atomic and owner-only (`0600`). Use `--no-history` only when you intentionally want the current sample instead of cumulative tracking.
 
@@ -116,7 +121,7 @@ For customer debugging, run with `--audit-log logs/session-token-monitor.jsonl` 
 
 ## Fallback Rules
 
-If the fresh context sample is missing but transcript size is known, still show the transcript line, show `📊 累積 Context：unknown / <limit>` when a limit is known (or `unknown tokens`), and retain the selected session's compaction line. Do not silently reuse stale history as if it were fresh.
+If the fresh context sample is missing but transcript size is known, still show the transcript line, show `📊 累積 Context：待回報 / <limit>` when a limit is known (or `待回報`), and retain the selected session's compaction line. Do not silently reuse stale history as if it were fresh.
 
 If transcript size is missing but runtime status has context tokens, omit the transcript line and show the context line.
 
@@ -132,3 +137,7 @@ If everything fails, output:
 - Never print secrets while reporting session status.
 - Before publishing this skill, scan the package for common secret patterns.
 - Do not include local customer-specific memory, transcripts, or config files.
+
+### Post-compaction pending Context
+
+A fresh `📚 Context: ?/272k` status has a known limit but no usage sample. Parse and retain that limit; render `📊 累積 Context：待回報 / 272K` (or `待回報` if no limit). Never substitute cached pre-compaction high-water or per-call tokens. The next fresh numeric runtime sample resumes the normal cumulative display and applies the compaction reset. This is a display/parser repair, not a change to the model capacity.

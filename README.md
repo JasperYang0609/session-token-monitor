@@ -66,6 +66,30 @@ A `.skill` file is a zip archive. If your OpenClaw setup does not provide a dire
 
 The helper refuses to guess cumulative context from per-call usage fields. It parses a fresh runtime Context sample via `--status-text` / `--status-file`, then keeps the highest trusted sample for the current Session and compaction segment. Lower samples do not make the footer go backward. Reset/new Session or a changed compaction count starts a new segment. History and audit files are owner-only, and history updates use atomic replacement. Use `--audit-log <path>` for customer troubleshooting.
 
+### OpenClaw canonical SQLite support
+
+When `~/.openclaw/agents/main/agent/openclaw-agent.sqlite` exists, the helper
+reads that authoritative store with an exact `--session-key`. Use
+`--sessions-db /path/to/openclaw-agent.sqlite` for another agent. It never falls
+back to stale migration JSON if the canonical database is unreadable or a key
+is absent. An explicit `--sessions-json` retains legacy/offline support.
+
+The footer always includes `🧹 對話壓縮：<count> 次`, including zero. A fresh
+runtime count wins; otherwise it uses only the selected current generation's
+`compactionCount`. Missing/null counts follow native status behavior (zero);
+malformed counts remain `unknown`. Counts are not summed across old sessions.
+
+SQLite reads use `mode=ro` and `PRAGMA query_only=ON`, project only session ID
+and compaction count from metadata, and aggregate current-generation logical
+UTF-8 event payload bytes. They never return dialogue, full metadata,
+credentials, or persisted token totals. Cold/unsupported/incomplete transcript
+byte measurements remain unknown without hiding a known compaction count.
+
+If the cumulative high-water exceeds a reported limit, the footer retains the
+cumulative value but shows `上限待核對` instead of presenting a contradictory
+capacity ratio. Raw limit values remain in JSON for diagnostics; no value is
+silently clamped, summed, or replaced with a guessed model window.
+
 ## Agent hook
 
 The installer adds this marker block to `AGENTS.md` or another always-loaded instruction file:
